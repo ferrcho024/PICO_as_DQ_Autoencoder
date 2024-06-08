@@ -4,21 +4,25 @@
 
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
+#include "pico/stdio.h"
+#include "littlefs-lib/pico_hal.h"
 
 /*
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include "freertos/queue.h"
+#inclqude "freertos/queue.h"
 */
 
 
 
 
 #include "parameters.h"
-#include "file_func.h"
+//#include "file_func.h"
+#include "connectivity.h"
 #include "dimensions.h"
 #include "ntp_client.h" // NTP 
 #include "mqtt.h"
+
  
 //extern char* in_txt;
 extern PubSubClient client;
@@ -40,10 +44,22 @@ float value_siata;
 //QueueHandle_t queue_df;
 //QueueHandle_t queue_nova;
 
+
+
+
+
 void task1() {
   int cont = 0; // Variable de conteo de datos recibidos.
   float queue_df[60];
   float queue_nova[60];
+
+  char c = getchar();
+
+  if (pico_mount((c | ' ') == 'y') != LFS_ERR_OK) {
+        Serial.printf("Error mounting FS\n");
+    }else{
+      Serial.printf("Se montó\n");
+    }
 
   while(true){
     delay(frec/4);
@@ -78,44 +94,8 @@ void task1() {
       printf("%d\n",cont);
       printf("\n");
     
-      value_to_list(queue_df, df_value, cont);
-      value_to_list(queue_nova, nova_value, cont);   
-
-      /*
-
-      // Extraer el token antes de la coma
-      char* comaPos1 = strchr(in_txt, ',');
-      if (comaPos1 == NULL) {
-        printf("Error: No se encontró la primera coma en el mensaje\n");
-        return;
-      }
-
-      *comaPos1 = '\0'; // Termina la primera parte de la cadena en la coma
-
-      // Encuentra la posición de la segunda coma
-      char* comaPos2 = strchr(comaPos1 + 1, ',');
-      if (comaPos2 == NULL) {
-          printf("Error: No se encontró la segunda coma en el mensaje\n");
-          return;
-      }
-      *comaPos2 = '\0'; // Termina la segunda parte de la cadena en la coma
-
-    // Extraer los valores de las partes de la cadena y almacenarlos en las listas
-    value_to_list(queue_df, in_txt, cont);
-    value_to_list(queue_nova, comaPos1 + 1, cont);
-    //value_to_list(queue_siata, comaPos2 + 1, cont);
-
-    //   if (token != ID){
-      
-      printf("Valor DF: %f\n",queue_df[cont]);
-      printf("Valor NOVA: %f\n",queue_nova[cont]);
-      printf("Valor SIATA: %f\n",comaPos2 + 1);
-      printf("%d\n",cont);
-      printf("\n");
-    
       //value_to_list(queue_df, df_value, cont);
-      //value_to_list(queue_nova, nova_value, cont);  
-      */       
+      //value_to_list(queue_nova, nova_value, cont);   
 
       callback = false;
       cont++;
