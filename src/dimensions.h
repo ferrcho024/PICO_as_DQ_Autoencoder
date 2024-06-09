@@ -4,6 +4,11 @@
 #include <math.h>
 #include <stdio.h>
 
+extern "C" {
+#include "utils.h"
+};
+
+/*
 float calculateMean(const float *data, size_t size) {
     float sum = 0.0, d1;
 
@@ -20,7 +25,7 @@ float calculateMean(const float *data, size_t size) {
 
     return sum / size;
 }
-
+*/
 
 float completeness(float *data, int size) {
     int expectedValues = size;

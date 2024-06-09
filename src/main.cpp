@@ -5,16 +5,19 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "pico/stdio.h"
-#include "littlefs-lib/pico_hal.h"
+//#include "littlefs-lib/pico_hal.h"
 
 // Import TensorFlow stuff - Autoencoder
 //#include <TensorFlowLite_ESP32.h>
+#include "modelo_df.h" // Autoencoder
 #include "tensorflow/lite/micro/kernels/micro_ops.h"
+//#include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/micro/micro_log.h"
+//#include "tensorflow/lite/micro/micro_log.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/micro/system_setup.h"
-#include "tensorflow/lite/schema/schema_generated.h"
+//#include "tensorflow/lite/micro/all_ops_resolver.h"
+//#include "tensorflow/lite/micro/system_setup.h"
+//#include "tensorflow/lite/schema/schema_generated.h"
 
 #include "parameters.h"
 //#include "file_func.h"
@@ -22,12 +25,11 @@
 #include "dimensions.h"
 #include "ntp_client.h" // NTP 
 #include "mqtt.h"
-#include "utils.h"
 
 // We need our utils functions for calculating MEAN, SD and Normalization
-//extern "C" {
-//#include "utils.h"
-//};
+extern "C" {
+#include "utils.h"
+};
 
 // Set to 1 to output debug info to Serial, 0 otherwise
 #define DEBUG 1
@@ -74,6 +76,7 @@ void task1() {
   float queue_df[60];
   float queue_nova[60];
 
+  /*
   char c = getchar();
 
   if (pico_mount((c | ' ') == 'y') != LFS_ERR_OK) {
@@ -81,6 +84,7 @@ void task1() {
     }else{
       Serial.printf("Se montó\n");
     }
+  */
 
   while(true){
     delay(frec/4);
@@ -278,6 +282,55 @@ void setup() {
   //writeFile(data, "fechaHora,pm25df,pm25nova");
   createMQTTClient();
   //connectMQTTBroker();
+
+
+  // Autoeoncoder
+  // Set up logging (will report to Serial, even within TFLite functions) - Autoencoder
+  //static tflite::ErrorReporter error_reporter;
+  //static tflite::MicroErrorReporter micro_error_reporter;
+  //error_reporter = &micro_error_reporter;
+
+  // Map the model into a usable data structure - Autoencoder
+  model = tflite::GetModel(modelo_df);
+  if (model->version() != TFLITE_SCHEMA_VERSION) {
+    error_reporter->Report("Model version does not match Schema");
+    while(1);
+  }
+
+
+  // With all Ops Resolver
+  //static tflite::AllOpsResolver micro_mutable_op_resolver;
+
+  // Pull in only needed operations (should match NN layers) - Autoencoder
+  // Available ops:
+  //  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/micro/kernels/micro_ops.h
+  // Based on https://colab.research.google.com/github/tensorflow/tensorflow/blob/master/tensorflow/lite/g3doc/guide/model_analyzer.ipynb#scrollTo=_jkg6UNtdz8c
+  static tflite::MicroMutableOpResolver<7> micro_mutable_op_resolver;
+  micro_mutable_op_resolver.AddConv2D();
+  micro_mutable_op_resolver.AddTransposeConv();
+  micro_mutable_op_resolver.AddStridedSlice();
+  micro_mutable_op_resolver.AddShape();
+  micro_mutable_op_resolver.AddPack();
+  micro_mutable_op_resolver.AddDequantize();
+  micro_mutable_op_resolver.AddQuantize();
+  
+  // Build an interpreter to run the model - Autoencoder
+  static tflite::MicroInterpreter static_interpreter(
+    model, micro_mutable_op_resolver, tensor_arena, kTensorArenaSize);
+  interpreter = &static_interpreter;
+
+  // Allocate memory from the tensor_arena for the model's tensors - Autoencoder
+  TfLiteStatus allocate_status = interpreter->AllocateTensors();
+  if (allocate_status != kTfLiteOk) {
+    error_reporter->Report("AllocateTensors() failed");
+    while(1);
+  }
+
+  // Assign model input and output buffers (tensors) to pointers - Autoencoder
+  model_input = interpreter->input(0);
+  model_output = interpreter->output(0);
+
+
 
   multicore_launch_core1(task2);
   task1();
