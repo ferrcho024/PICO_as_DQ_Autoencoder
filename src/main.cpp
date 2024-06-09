@@ -7,14 +7,14 @@
 #include "pico/stdio.h"
 #include "littlefs-lib/pico_hal.h"
 
-/*
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#inclqude "freertos/queue.h"
-*/
-
-
-
+// Import TensorFlow stuff - Autoencoder
+//#include <TensorFlowLite_ESP32.h>
+#include "tensorflow/lite/micro/kernels/micro_ops.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_log.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/system_setup.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 
 #include "parameters.h"
 //#include "file_func.h"
@@ -22,8 +22,23 @@
 #include "dimensions.h"
 #include "ntp_client.h" // NTP 
 #include "mqtt.h"
+#include "utils.h"
 
- 
+// We need our utils functions for calculating MEAN, SD and Normalization
+//extern "C" {
+//#include "utils.h"
+//};
+
+// Set to 1 to output debug info to Serial, 0 otherwise
+#define DEBUG 1
+
+// Settings Autoencoder
+constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
+constexpr float MEAN_TRAINING = 26.403898673843077;    // Mean of the training process
+constexpr float STD_TRAINING = 10.86128076630132;    // Standard Desviation of the training process
+constexpr int WAIT_TIME = 1000;       // ms between sample sets
+
+// Settings DQ 
 //extern char* in_txt;
 extern PubSubClient client;
 extern String in_txt;
@@ -39,14 +54,20 @@ float values_df[60];
 float values_nova[60];
 float value_siata;
 
+// TFLite globals, used for compatibility with Arduino-style sketches - Autoencoder
+namespace {
+  tflite::ErrorReporter* error_reporter = nullptr;
+  const tflite::Model* model = nullptr;
+  tflite::MicroInterpreter* interpreter = nullptr;
+  TfLiteTensor* model_input = nullptr;
+  TfLiteTensor* model_output = nullptr;
 
-// Declaración de una cola
-//QueueHandle_t queue_df;
-//QueueHandle_t queue_nova;
-
-
-
-
+  // Create an area of memory to use for input, output, and other TensorFlow
+  // arrays. You'll need to adjust this by combiling, running, and looking
+  // for errors.
+  constexpr int kTensorArenaSize = 6 * 1024;
+  uint8_t tensor_arena[kTensorArenaSize];
+} // namespace
 
 void task1() {
   int cont = 0; // Variable de conteo de datos recibidos.
@@ -164,6 +185,74 @@ void task2() {
       dimen[siataValue%24][9] = DQIndex;
 
       //read_data_from_file("/spiffs/data.txt"); // Lee el archivo con formato de hora y valor float
+
+      // Autoencoder
+      TfLiteStatus invoke_status;
+
+      //size_t size = sizeof(read_data) / sizeof(read_data[0]);
+
+      float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
+
+      // Copiar los datos al tensor de entrada del modelo
+      for (int i = 0; i < listSize; i++) {
+          float value = input_data[i];
+          model_input->data.f[0] = value;
+
+          /*
+          Serial.println("\nValores ingresados al modelo");
+          for (int pos = 0; pos < listSize; pos++) {
+            Serial.println(model_input->data.f[pos]);
+          }
+          */
+
+          // Run inference
+          invoke_status = interpreter->Invoke();
+          if (invoke_status != kTfLiteOk) {
+            error_reporter->Report("Invoke failed on input");
+          }
+
+          // Read predicted y value from output buffer (tensor)
+          float acum = 0;
+          Serial.println();
+          
+
+          //Serial.println("\nValores output después de ejecutado el modelo 1");
+          // Reshaping the array for compatibility with 1D model
+          for (int pos = 0; pos < listSize*16; pos+=4) {
+            //Serial.println(model_output->data.f[pos]);
+
+            acum += model_output->data.f[pos];
+          }
+
+          float pred_vals = acum/4;
+
+          /*
+          Serial.println("\nValores output después de ejecutado el modelo 2");
+          Serial.println(pred_vals);
+          */
+
+          #if DEBUG
+            Serial.println("Inference result: ");
+            String msg = "Is " + String(value,2) + " an Outlier?: ";
+            Serial.print(msg);
+            float mae_loss = fabs(pred_vals - value);
+            if (mae_loss > THRESHOLD){
+              Serial.println("YES");
+              Serial.println("****** OUTLIER ******");
+              Serial.print("INPUT DATA: ");
+              Serial.println(values_df[i]);
+              Serial.print("MAE: ");
+              Serial.println(mae_loss);
+              Serial.println();
+            }
+            else{
+              Serial.println("NO");
+            }           
+          #endif
+      }
+
+
+
     }
 
   }
