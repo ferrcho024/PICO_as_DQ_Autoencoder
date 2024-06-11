@@ -32,7 +32,7 @@ extern "C" {
 };
 
 // Set to 1 to output debug info to Serial, 0 otherwise
-#define DEBUG 0
+#define DEBUG 1
 
 // Settings Autoencoder
 constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
@@ -221,56 +221,71 @@ void task2() {
 
       */
 
+      //Serial.println("Antes invoke_status");
       // Autoencoder
       TfLiteStatus invoke_status;
+
+      //Serial.println("Después invoke_status");
 
       //size_t size = sizeof(read_data) / sizeof(read_data[0]);
 
       float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
+      float mae_loss = 0;
 
       // Copiar los datos al tensor de entrada del modelo
       for (int i = 0; i < listSize; i++) {
           float value = input_data[i];
-          model_input->data.f[0] = value;
+        
+          if(isnan(value)){
+            mae_loss = 0;
+          }else{
 
-          /*
-          Serial.println("\nValores ingresados al modelo");
-          for (int pos = 0; pos < listSize; pos++) {
-            Serial.println(model_input->data.f[pos]);
+            model_input->data.f[0] = value;
+
+            /*
+            Serial.println("\nValores ingresados al modelo");
+            for (int pos = 0; pos < listSize; pos++) {
+              Serial.println(model_input->data.f[pos]);
+            }
+            */
+
+            // Run inference
+            invoke_status = interpreter->Invoke();
+            if (invoke_status != kTfLiteOk) {
+              error_reporter->Report("Invoke failed on input");
+            }
+
+            // Read predicted y value from output buffer (tensor)
+            float acum = 0;
+            //Serial.println();
+            
+
+            //Serial.print("\nValores output después de ejecutado el modelo para el valor número: ");
+            //Serial.println(i);
+            // Reshaping the array for compatibility with 1D model
+            for (int pos = 0; pos < 16; pos+=4) {
+              //Serial.print("Posición: ");
+              //Serial.println(pos);
+              //Serial.print("Valor: ");
+              //Serial.println(model_output->data.f[pos]); 
+
+              acum += model_output->data.f[pos];
+            }
+
+            float pred_vals = acum/4;
+
+            mae_loss = fabs(pred_vals - value);
+
+            
+            //Serial.print("\nValores output después de ejecutado el modelo 2: ");
+            //Serial.println(pred_vals);
           }
-          */
-
-          // Run inference
-          invoke_status = interpreter->Invoke();
-          if (invoke_status != kTfLiteOk) {
-            error_reporter->Report("Invoke failed on input");
-          }
-
-          // Read predicted y value from output buffer (tensor)
-          float acum = 0;
-          Serial.println();
           
 
-          //Serial.println("\nValores output después de ejecutado el modelo 1");
-          // Reshaping the array for compatibility with 1D model
-          for (int pos = 0; pos < listSize*16; pos+=4) {
-            //Serial.println(model_output->data.f[pos]);
-
-            acum += model_output->data.f[pos];
-          }
-
-          float pred_vals = acum/4;
-
-          /*
-          Serial.println("\nValores output después de ejecutado el modelo 2");
-          Serial.println(pred_vals);
-          */
-
           #if DEBUG
-            Serial.println("Inference result: ");
+            Serial.println("\nInference result: ");
             String msg = "Is " + String(value,2) + " an Outlier?: ";
             Serial.print(msg);
-            float mae_loss = fabs(pred_vals - value);
             if (mae_loss > THRESHOLD){
               Serial.println("YES");
               Serial.println("****** OUTLIER ******");
