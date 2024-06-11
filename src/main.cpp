@@ -32,7 +32,7 @@ extern "C" {
 };
 
 // Set to 1 to output debug info to Serial, 0 otherwise
-#define DEBUG 1
+#define DEBUG 0
 
 // Settings Autoencoder
 constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
@@ -55,6 +55,14 @@ int frec = 1000; // Espacio de tiempo entre los values que llegan (en milisegund
 float values_df[60];
 float values_nova[60];
 float value_siata;
+
+void value_to_list(float *list, const char* value, int pos ){
+    if (strcmp(value, "nan") == 0)  {
+        list[pos] = NAN;  // Representación de NaN en C
+    } else {
+        list[pos] = atof(value);
+    }
+}
 
 // TFLite globals, used for compatibility with Arduino-style sketches - Autoencoder
 namespace {
@@ -88,6 +96,7 @@ void task1() {
 
   while(true){
     delay(frec/4);
+    client.loop();
 
     if (cont > 59){
       cont = 0;
@@ -96,7 +105,8 @@ void task1() {
       ban = false;
     }
 
-    if (callback){  
+    if (callback){ 
+      ledBlink(1); 
 
       //   Encontrar la posición de la primera coma
       int comaPos1 = in_txt.indexOf(',');
@@ -110,17 +120,21 @@ void task1() {
       in_txt = in_txt.substring(comaPos2 + 1);
       value_siata = in_txt.toFloat();
 
+      in_txt = "";
 
+      /*
     //   if (token != ID){
       
-      printf("Valor DF: %s\n",df_value);
-      printf("Valor NOVA: %s\n",nova_value);
-      printf("Valor SIATA: %s\n",in_txt);
-      printf("%d\n",cont);
-      printf("\n");
+      Serial.printf("Valor DF: %s\n",df_value);
+      Serial.printf("Valor NOVA: %s\n",nova_value);
+      Serial.printf("Valor SIATA: %s\n",in_txt);
+      Serial.printf("%d\n",cont);
+      Serial.printf("\n");
+
+      */
     
-      //value_to_list(queue_df, df_value, cont);
-      //value_to_list(queue_nova, nova_value, cont);   
+      value_to_list(queue_df, df_value.c_str(), cont);
+      value_to_list(queue_nova, nova_value.c_str(), cont);   
 
       callback = false;
       cont++;
@@ -130,46 +144,61 @@ void task1() {
 
 void task2() {
   float dimen[24][10];
+  int decimales = 5;
   while (true) {
 
     delay(frec/2);
 
     if(!ban){
-      printf("Tarea 2 ejecutándose en el núcleo 1 %d\n", ban);
+      Serial.printf("Tarea 2 ejecutándose en el núcleo 2");
       ban = true;
       listSize = sizeof(values_nova)/4;
 
       float p_com_df = completeness(values_df, listSize);
-      printf("********** Completeness DF: %.5f\n", p_com_df);
+      Serial.print("********** Completeness DF: ");
+      Serial.println(p_com_df, decimales);
       
       float p_com_nova = completeness(values_nova, listSize);
-      printf("********** Completeness NOVA: %.5f\n", p_com_nova);
+      Serial.print("********** Completeness NOVA: ");
+      Serial.println(p_com_nova, decimales);
 
       float uncer = uncertainty(values_df, values_nova, listSize);
-      printf("********** Uncertainty: %.5f\n", uncer);
+      Serial.print("********** Uncertainty: ");
+      Serial.println(uncer, decimales);
 
       float p_df = precision(values_df, listSize);
-      printf("********** Precision DF: %.5f\n", p_df);
+      Serial.print("********** Precision DF: ");
+      Serial.println(p_df, decimales);
 
       float p_nova = precision(values_nova, listSize);
-      printf("********** Precision NOVA: %.5f\n", p_nova);
+      Serial.print("********** Precision NOVA: ");
+      Serial.println(p_nova, decimales);
       
       float a_df = accuracy(values_df, value_siata, listSize);
-      printf("********** Accuracy DF: %.5f\n", a_df);
+      Serial.print("********** Accuracy DF: ");
+      Serial.println(a_df, decimales);
 
       float a_nova = accuracy(values_nova, value_siata, listSize);
-      printf("********** Accuracy NOVA: %.5f\n", a_nova);
+      Serial.print("********** Accuracy NOVA: ");
+      Serial.println(a_nova, decimales);
 
       float concor = PearsonCorrelation(values_df, values_nova, listSize);
-      printf("********** Concordance: %.5f\n", concor);
+      Serial.print("********** Concordance: ");
+      Serial.println(concor, decimales);
 
       float* valuesFusioned = plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize);
       float fusion = calculateMean(valuesFusioned, listSize);
-      printf("********** Value Fusioned: %.5f\n", fusion);
+      Serial.print("********** Value Fusioned: ");
+      Serial.println(fusion, decimales);
 
       float DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
-      printf("********** DQ Index: %.5f\n", DQIndex);
+      Serial.print("********** DQ Index: ");
+      Serial.println(DQIndex, decimales);
 
+      String mqtt_msg = String(ID) + "," + String(fusion, decimales) + ",distancia," + String(DQIndex, decimales);
+      //client.publish(TOPIC.c_str(), mqtt_msg);
+
+      /*
       char mqtt_msg[50];
       sprintf(mqtt_msg, "%s,%.5f,distancia,%.5f",ID,fusion,DQIndex);
       client.publish(TOPIC.c_str(), mqtt_msg);
@@ -189,6 +218,8 @@ void task2() {
       dimen[siataValue%24][9] = DQIndex;
 
       //read_data_from_file("/spiffs/data.txt"); // Lee el archivo con formato de hora y valor float
+
+      */
 
       // Autoencoder
       TfLiteStatus invoke_status;
@@ -255,8 +286,7 @@ void task2() {
           #endif
       }
 
-
-
+      Serial.print("Fin del código en núcleo 2\n");
     }
 
   }
@@ -344,7 +374,7 @@ void setup() {
 }
 
 void loop() {
-  reconnectMQTTClient();
-  client.loop();
-  delay(1000);
+  //reconnectMQTTClient();
+  //client.loop();
+  //delay(1000);
 }

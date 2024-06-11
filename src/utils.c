@@ -20,14 +20,14 @@ float calculateMean(const float *data, size_t size) {
     float sum = 0.0, d1;
 
     for (int i = 0; i < size; i++) {
-      // Data 1
-      if(isnan(*(data + i))) {
-          d1 = 0;
-      }
-      else {
-          d1 = *(data + i);
-      }
-      sum += d1;
+    // Data 1
+        if(isnan(data[i])) {
+            d1 = 0;
+        }
+        else {
+            d1 = data[i];
+        }
+        sum += d1;
     }
 
     return sum / size;

@@ -14,13 +14,13 @@ float calculateMean(const float *data, size_t size) {
 
     for (int i = 0; i < size; i++) {
     // Data 1
-    if(isnan(*(data + i))) {
-        d1 = 0;
-    }
-    else {
-        d1 = *(data + i);
-    }
-    sum += d1;
+        if(isnan(data[i])) {
+            d1 = 0;
+        }
+        else {
+            d1 = data[i];
+        }
+        sum += d1;
     }
 
     return sum / size;
@@ -28,12 +28,13 @@ float calculateMean(const float *data, size_t size) {
 */
 
 float completeness(float *data, int size) {
-    int expectedValues = size;
-    int validValues = 0;
+    //int expectedValues = size;
+    float validValues = 0;
     for (int i = 0; i < size; i++) {
-        if (!isnan(*(data + i))) {
+        if (!isnan(data[i])) {
             validValues++;
             // Dato presente
+    
 #ifdef DEBUG
             printf("Data[%d] = %.4f\n", i,*(data + i));
 #endif
@@ -45,7 +46,8 @@ float completeness(float *data, int size) {
         }
 #endif
     }
-    return (float) validValues / expectedValues;
+   
+    return (float) validValues/size;
 }
 
 float uncertainty(float *data1,float *data2, int size) {
@@ -55,18 +57,18 @@ float uncertainty(float *data1,float *data2, int size) {
     float max;
     for (int i = 0; i < size; i++) {
         // Data 1
-        if(isnan(*(data1 + i))) {
+        if(isnan(data1[i])) {
             d1 = 0;
         }
         else {
-            d1 = *(data1 + i);
+            d1 = data1[i];
         }
         // Data 2
-        if(isnan(*(data2 + i))) {
+        if(isnan(data2[i])) {
             d2 = 0;
         }
         else {
-            d2 = *(data2 + i);
+            d2 = data2[i];
         }
         error += (d1 - d2)*(d1 - d2);
         avg += (d1 + d2);
@@ -96,11 +98,11 @@ float precision(float *data1, int size) {
     float v;
     for (int i = 0; i < size; i++) {
         // Data 1
-        if(isnan(*(data1 + i))) {
+        if(isnan(data1[i])) {
             d1 = 0;
         }
         else {
-            d1 = *(data1 + i);
+            d1 = data1[i];
         }
         avg += d1;
 #ifdef DEBUG
@@ -110,11 +112,11 @@ float precision(float *data1, int size) {
     avg /= size;
 
     for (int i = 0; i < size; i++) {
-        if(isnan(*(data1 + i))) {
+        if(isnan(data1[i])) {
             d1 = 0;
         }
         else {
-            d1 = *(data1 + i);
+            d1 = data1[i];
         }
         sum += (d1 - avg)*(d1 - avg);
     }
@@ -170,7 +172,7 @@ float PearsonCorrelation(float *list1, float *list2, int size) {
     float denominator2 = 0.0;
 
     for (size_t i = 0; i < size; ++i) {
-        if(isnan(*(list1 + i)) || isnan(*(list2 + i))) {
+        if(isnan(list1[i]) || isnan(list2[i])) {
             numerator += 0;
         }
         else {
@@ -237,7 +239,11 @@ float* plausability(float p_com_df, float p_com_nova, float p_df, float p_nova, 
     float* fusioned = (float*)malloc(size * sizeof(float));
     
     for (int i = 0; i < size; i++) {
-        fusioned[i] = (data1[i] * a) + (data2[i] * b);
+        if(isnan(data1[i]) || isnan(data2[i])) {          
+            fusioned[i] = NAN;      
+        }else{         
+            fusioned[i] = (data1[i] * a) + (data2[i] * b);
+        }  
     }
 
     return fusioned; 
