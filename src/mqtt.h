@@ -60,7 +60,7 @@ void reconnectMQTTClient() {
       client.subscribe(TOPIC.c_str());
       Serial.print("Subscribed to Topic: ");
       Serial.println(TOPIC.c_str());
-      client.setCallback(clientCallback);
+      client.setCallback(clientCallback); 
     }
     else {
       Serial.print("Retying in 5 seconds - failed, rc=");

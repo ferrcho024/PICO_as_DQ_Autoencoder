@@ -31,8 +31,12 @@ extern "C" {
 #include "utils.h"
 };
 
-// Set to 1 to output debug info to Serial, 0 otherwise
-#define DEBUG 1
+// Set debug info
+#define DEBUG 2 //{0: No debug anything, 
+                // 1: Debug full DQ and Autoencoder results, 
+                // 2: Debug resume DQ only, 
+                // 3: Debug resume Autoencoder only,
+                // 4: Debug DQ and Autoencoder resume}
 
 // Settings Autoencoder
 constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
@@ -145,57 +149,89 @@ void task1() {
 void task2() {
   float dimen[24][10];
   int decimales = 5;
+  const char* outlier;
+  float mae_loss;
+
+  #if DEBUG == 2
+    Serial.print("comp_df,comp_nova,pres_df,pres_nova,acc_df,acc_nova,uncer,concor,fusion,DQIndex\n");
+  #endif
+
+  #if DEBUG == 3
+    Serial.print("value,OUTLIER,mae\n");
+  #endif
+
   while (true) {
 
     delay(frec/2);
 
     if(!ban){
-      Serial.printf("Tarea 2 ejecutándose en el núcleo 2");
+      #if DEBUG == 1
+        Serial.print("Tarea 2 ejecutándose en el núcleo 2\n");
+      #endif
       ban = true;
       listSize = sizeof(values_nova)/4;
 
-      float p_com_df = completeness(values_df, listSize);
-      Serial.print("********** Completeness DF: ");
-      Serial.println(p_com_df, decimales);
-      
+      float p_com_df = completeness(values_df, listSize);   
       float p_com_nova = completeness(values_nova, listSize);
-      Serial.print("********** Completeness NOVA: ");
-      Serial.println(p_com_nova, decimales);
-
       float uncer = uncertainty(values_df, values_nova, listSize);
-      Serial.print("********** Uncertainty: ");
-      Serial.println(uncer, decimales);
-
       float p_df = precision(values_df, listSize);
-      Serial.print("********** Precision DF: ");
-      Serial.println(p_df, decimales);
-
       float p_nova = precision(values_nova, listSize);
-      Serial.print("********** Precision NOVA: ");
-      Serial.println(p_nova, decimales);
-      
       float a_df = accuracy(values_df, value_siata, listSize);
-      Serial.print("********** Accuracy DF: ");
-      Serial.println(a_df, decimales);
-
       float a_nova = accuracy(values_nova, value_siata, listSize);
-      Serial.print("********** Accuracy NOVA: ");
-      Serial.println(a_nova, decimales);
-
       float concor = PearsonCorrelation(values_df, values_nova, listSize);
-      Serial.print("********** Concordance: ");
-      Serial.println(concor, decimales);
-
       float* valuesFusioned = plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize);
       float fusion = calculateMean(valuesFusioned, listSize);
-      Serial.print("********** Value Fusioned: ");
-      Serial.println(fusion, decimales);
-
       float DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
-      Serial.print("********** DQ Index: ");
-      Serial.println(DQIndex, decimales);
 
-      String mqtt_msg = String(ID) + "," + String(fusion, decimales) + ",distancia," + String(DQIndex, decimales);
+
+      #if DEBUG == 1
+        Serial.print("\n**********************************************\n");
+        Serial.print("********** Completeness DF: ");
+        Serial.println(p_com_df, decimales);
+        Serial.print("********** Completeness NOVA: ");
+        Serial.println(p_com_nova, decimales);
+        Serial.print("********** Uncertainty: ");
+        Serial.println(uncer, decimales);
+        Serial.print("********** Precision DF: ");
+        Serial.println(p_df, decimales);
+        Serial.print("********** Precision NOVA: ");
+        Serial.println(p_nova, decimales);
+        Serial.print("********** Accuracy DF: ");
+        Serial.println(a_df, decimales);
+        Serial.print("********** Accuracy NOVA: ");
+        Serial.println(a_nova, decimales);
+        Serial.print("********** Concordance: ");
+        Serial.println(concor, decimales);
+        Serial.print("********** Value Fusioned: ");
+        Serial.println(fusion, decimales);
+        Serial.print("********** DQ Index: ");
+        Serial.println(DQIndex, decimales);
+      #endif
+
+      #if (DEBUG == 2) || (DEBUG == 4)
+        Serial.print(p_com_df, decimales);
+        Serial.print(",");
+        Serial.print(p_com_nova, decimales);
+        Serial.print(",");
+        Serial.print(p_df, decimales);
+        Serial.print(",");
+        Serial.print(p_nova, decimales);
+        Serial.print(",");
+        Serial.print(a_df, decimales);
+        Serial.print(",");
+        Serial.print(a_nova, decimales);
+        Serial.print(",");
+        Serial.print(uncer, decimales);
+        Serial.print(",");
+        Serial.print(concor, decimales);
+        Serial.print(",");
+        Serial.print(fusion, decimales);
+        Serial.print(",");
+        Serial.println(DQIndex, decimales);
+      #endif
+
+
+      //String mqtt_msg = String(ID) + "," + String(fusion, decimales) + ",distancia," + String(DQIndex, decimales);
       //client.publish(TOPIC.c_str(), mqtt_msg);
 
       /*
@@ -230,7 +266,6 @@ void task2() {
       //size_t size = sizeof(read_data) / sizeof(read_data[0]);
 
       float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
-      float mae_loss = 0;
 
       // Copiar los datos al tensor de entrada del modelo
       for (int i = 0; i < listSize; i++) {
@@ -238,6 +273,7 @@ void task2() {
         
           if(isnan(value)){
             mae_loss = 0;
+            outlier = "N";
           }else{
 
             model_input->data.f[0] = value;
@@ -275,33 +311,45 @@ void task2() {
             float pred_vals = acum/4;
 
             mae_loss = fabs(pred_vals - value);
-
+            if (mae_loss > THRESHOLD){
+              outlier = "Y";
+            }else{
+              outlier = "N";
+            }
             
             //Serial.print("\nValores output después de ejecutado el modelo 2: ");
             //Serial.println(pred_vals);
-          }
           
 
-          #if DEBUG
-            Serial.println("\nInference result: ");
-            String msg = "Is " + String(value,2) + " an Outlier?: ";
-            Serial.print(msg);
-            if (mae_loss > THRESHOLD){
-              Serial.println("YES");
-              Serial.println("****** OUTLIER ******");
-              Serial.print("INPUT DATA: ");
-              Serial.println(values_df[i]);
-              Serial.print("MAE: ");
-              Serial.println(mae_loss);
-              Serial.println();
-            }
-            else{
-              Serial.println("NO");
-            }           
+            #if DEBUG == 1
+              Serial.println("\nInference result: ");
+              String msg = "Is " + String(value,2) + " an Outlier?: ";
+              Serial.print(msg);
+              if (mae_loss > THRESHOLD){
+                Serial.println("YES");
+                Serial.println("****** OUTLIER ******");
+                Serial.print("INPUT DATA: ");
+                Serial.println(values_df[i]);
+                Serial.print("MAE: ");
+                Serial.println(mae_loss);
+                //Serial.println();
+              }
+              else{
+                Serial.println("NO");
+              }           
+            #endif
+          }
+
+          #if (DEBUG == 3) || (DEBUG == 4)
+            Serial.print(values_df[i], decimales);
+            Serial.print(",");
+            Serial.print(*outlier);
+            Serial.print(",");
+            Serial.println(mae_loss, decimales);
           #endif
       }
 
-      Serial.print("Fin del código en núcleo 2\n");
+      //Serial.print("Fin del código en núcleo 2\n");
     }
 
   }
