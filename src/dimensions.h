@@ -148,7 +148,11 @@ float accuracy(float *data1, float data2, int size) {
 
     // avg /= size;
 
-    v = fabs(avg - data2)/data2;
+    if(isnan(data2)){
+        v = 9999; 
+    }else{
+        v = fabs(avg - data2)/data2;
+    }
 
     if (0 >= 1 - v) {
         max = 0;
@@ -199,7 +203,7 @@ float PearsonCorrelation(float *list1, float *list2, int size) {
     return corr;
 }
 
-float* plausability(float p_com_df, float p_com_nova, float p_df, float p_nova, float a_df, float a_nova, float *data1, float *data2, int size){
+void plausability(float p_com_df, float p_com_nova, float p_df, float p_nova, float a_df, float a_nova, float *data1, float *data2, int size, float* valuesFusioned){
     float sum_df = 0, sum_nova;
 
     if (p_com_df > 0.75){
@@ -241,17 +245,11 @@ float* plausability(float p_com_df, float p_com_nova, float p_df, float p_nova, 
     float a = sum_df/(sum_df + sum_nova);
     float b = 1 - a;
 
-    float* fusioned = (float*)malloc(size * sizeof(float));
+    //float* fusioned = (float*)malloc(size * sizeof(float));
     
     for (int i = 0; i < size; i++) {
-        if(isnan(data1[i]) || isnan(data2[i])) {          
-            fusioned[i] = NAN;      
-        }else{         
-            fusioned[i] = (data1[i] * a) + (data2[i] * b);
-        }  
+        valuesFusioned[i] = (data1[i] * a) + (data2[i] * b);
     }
-
-    return fusioned; 
 
 }
 

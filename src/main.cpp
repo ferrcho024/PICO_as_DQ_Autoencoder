@@ -5,6 +5,7 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "pico/stdio.h"
+#include "pico/time.h"
 //#include "littlefs-lib/pico_hal.h"
 
 // Import TensorFlow stuff - Autoencoder
@@ -32,11 +33,18 @@ extern "C" {
 };
 
 // Set debug info
-#define DEBUG 2 //{0: No debug anything, 
+#define DEBUG 5 //{0: No debug anything, 
                 // 1: Debug full DQ and Autoencoder results, 
                 // 2: Debug resume DQ only, 
                 // 3: Debug resume Autoencoder only,
-                // 4: Debug DQ and Autoencoder resume}
+                // 4: Debug DQ and Autoencoder resume,
+                // 5: Debug time and memory}
+
+#define MAX_SIZE 60
+
+// Execution times
+char mensaje[200];
+int posicion = 0;
 
 // Settings Autoencoder
 constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
@@ -50,14 +58,14 @@ extern PubSubClient client;
 extern String in_txt;
 extern bool callback;
 
-int listSize;  // Tamaño de la lista que almacena los values
-int startline; // Inicializa la lectura desde la línea 0
-int siataValue; // Contador para extraer el valor de la estación SIATA
+//int listSize;  // Tamaño de la lista que almacena los values
+//int startline; // Inicializa la lectura desde la línea 0
+//int siataValue; // Contador para extraer el valor de la estación SIATA
 
 bool ban = true;
 int frec = 1000; // Espacio de tiempo entre los values que llegan (en milisegundos)
-float values_df[60];
-float values_nova[60];
+float values_df[MAX_SIZE];
+float values_nova[MAX_SIZE];
 float value_siata;
 
 void value_to_list(float *list, const char* value, int pos ){
@@ -85,8 +93,8 @@ namespace {
 
 void task1() {
   int cont = 0; // Variable de conteo de datos recibidos.
-  float queue_df[60];
-  float queue_nova[60];
+  float queue_df[MAX_SIZE];
+  float queue_nova[MAX_SIZE];
 
   /*
   char c = getchar();
@@ -147,17 +155,39 @@ void task1() {
 }
 
 void task2() {
-  float dimen[24][10];
-  int decimales = 5;
-  const char* outlier;
+  //float dimen[24][10];
+  char outlier;
   float mae_loss;
+  int decimales = 5;
+  size_t listSize;
+  static float input_data[MAX_SIZE];
+  static float valuesFusioned[MAX_SIZE];
+
+  float p_com_df;   
+  float p_com_nova;
+  float uncer;
+  float p_df;
+  float p_nova;
+  float a_df;
+  float a_nova;
+  float concor;
+  float fusion;
+  float DQIndex;
+  float valueNorm; // value for normalized values as autoencoder input
+  float acum; // Acumulator for Read predicted y value from output buffer (tensor)
+  float pred_vals; // Value predicted for the Autoencoder
 
   #if DEBUG == 2
-    Serial.print("comp_df,comp_nova,pres_df,pres_nova,acc_df,acc_nova,uncer,concor,fusion,DQIndex\n");
+    Serial.print(F("comp_df,comp_nova,pres_df,pres_nova,acc_df,acc_nova,uncer,concor,fusion,DQIndex\n"));
   #endif
 
   #if DEBUG == 3
-    Serial.print("value,OUTLIER,mae\n");
+    Serial.print(F("value,OUTLIER,mae\n"));
+  #endif
+
+  #if DEBUG == 5
+    //Serial.print(F("t_beforeDQ,mem_beforeDQ,t_afertDQ,mem_afertDQ,t_initAuto,mem_initAuto,t_finAuto,mem_finAuto\n"));
+    Serial.print(F("t_beforeDQ,t_afertDQ,t_initAuto,t_finAuto\n"));
   #endif
 
   while (true) {
@@ -166,67 +196,85 @@ void task2() {
 
     if(!ban){
       #if DEBUG == 1
-        Serial.print("Tarea 2 ejecutándose en el núcleo 2\n");
+        Serial.print(F("Tarea 2 ejecutándose en el núcleo 2\n"));
       #endif
       ban = true;
-      listSize = sizeof(values_nova)/4;
 
-      float p_com_df = completeness(values_df, listSize);   
-      float p_com_nova = completeness(values_nova, listSize);
-      float uncer = uncertainty(values_df, values_nova, listSize);
-      float p_df = precision(values_df, listSize);
-      float p_nova = precision(values_nova, listSize);
-      float a_df = accuracy(values_df, value_siata, listSize);
-      float a_nova = accuracy(values_nova, value_siata, listSize);
-      float concor = PearsonCorrelation(values_df, values_nova, listSize);
-      float* valuesFusioned = plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize);
-      float fusion = calculateMean(valuesFusioned, listSize);
-      float DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
+      listSize = sizeof(values_nova) / sizeof(values_nova[0]);
+      //listSize = sizeof(values_nova)/4;
+
+      #if DEBUG == 5
+        // t_beforeDQ and mem_beforeDQ
+        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
+        mensaje[posicion++] = ',';
+        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
+        //mensaje[posicion++] = ',';
+      #endif
+
+      p_com_df = completeness(values_df, listSize);   
+      p_com_nova = completeness(values_nova, listSize);
+      uncer = uncertainty(values_df, values_nova, listSize);
+      p_df = precision(values_df, listSize);
+      p_nova = precision(values_nova, listSize);
+      a_df = accuracy(values_df, value_siata, listSize);
+      a_nova = accuracy(values_nova, value_siata, listSize);
+      concor = PearsonCorrelation(values_df, values_nova, listSize);
+      plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize, valuesFusioned);
+      fusion = calculateMean(valuesFusioned, listSize);
+      DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
+
+      #if DEBUG == 5
+        // t_afterDQ and mem_afterDQ
+        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
+        mensaje[posicion++] = ',';
+        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
+        //mensaje[posicion++] = ',';
+      #endif
 
 
       #if DEBUG == 1
-        Serial.print("\n**********************************************\n");
-        Serial.print("********** Completeness DF: ");
+        Serial.print(F("\n**********************************************\n"));
+        Serial.print(F("********** Completeness DF: "));
         Serial.println(p_com_df, decimales);
-        Serial.print("********** Completeness NOVA: ");
+        Serial.print(F("********** Completeness NOVA: "));
         Serial.println(p_com_nova, decimales);
-        Serial.print("********** Uncertainty: ");
+        Serial.print(F("********** Uncertainty: "));
         Serial.println(uncer, decimales);
-        Serial.print("********** Precision DF: ");
+        Serial.print(F("********** Precision DF: "));
         Serial.println(p_df, decimales);
-        Serial.print("********** Precision NOVA: ");
+        Serial.print(F("********** Precision NOVA: "));
         Serial.println(p_nova, decimales);
-        Serial.print("********** Accuracy DF: ");
+        Serial.print(F("********** Accuracy DF: "));
         Serial.println(a_df, decimales);
-        Serial.print("********** Accuracy NOVA: ");
+        Serial.print(F("********** Accuracy NOVA: "));
         Serial.println(a_nova, decimales);
-        Serial.print("********** Concordance: ");
+        Serial.print(F("********** Concordance: "));
         Serial.println(concor, decimales);
-        Serial.print("********** Value Fusioned: ");
+        Serial.print(F("********** Value Fusioned: "));
         Serial.println(fusion, decimales);
-        Serial.print("********** DQ Index: ");
+        Serial.print(F("********** DQ Index: "));
         Serial.println(DQIndex, decimales);
       #endif
 
       #if (DEBUG == 2) || (DEBUG == 4)
         Serial.print(p_com_df, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(p_com_nova, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(p_df, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(p_nova, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(a_df, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(a_nova, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(uncer, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(concor, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.print(fusion, decimales);
-        Serial.print(",");
+        Serial.print(F(","));
         Serial.println(DQIndex, decimales);
       #endif
 
@@ -258,6 +306,18 @@ void task2() {
       */
 
       //Serial.println("Antes invoke_status");
+
+      //float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
+      normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING, input_data);
+
+      #if DEBUG == 5
+        // t_initAuto and mem_initAuto
+        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
+        mensaje[posicion++] = ',';
+        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
+        //mensaje[posicion++] = ',';
+      #endif
+
       // Autoencoder
       TfLiteStatus invoke_status;
 
@@ -265,18 +325,18 @@ void task2() {
 
       //size_t size = sizeof(read_data) / sizeof(read_data[0]);
 
-      float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
+      
 
       // Copiar los datos al tensor de entrada del modelo
       for (int i = 0; i < listSize; i++) {
-          float value = input_data[i];
+          float valueNorm = input_data[i];
         
-          if(isnan(value)){
+          if(isnan(valueNorm)){
             mae_loss = 0;
-            outlier = "N";
+            outlier = 'N';
           }else{
 
-            model_input->data.f[0] = value;
+            model_input->data.f[0] = valueNorm;
 
             /*
             Serial.println("\nValores ingresados al modelo");
@@ -292,7 +352,7 @@ void task2() {
             }
 
             // Read predicted y value from output buffer (tensor)
-            float acum = 0;
+            acum = 0;
             //Serial.println();
             
 
@@ -308,13 +368,13 @@ void task2() {
               acum += model_output->data.f[pos];
             }
 
-            float pred_vals = acum/4;
+            pred_vals = acum/4;
 
-            mae_loss = fabs(pred_vals - value);
+            mae_loss = fabs(pred_vals - valueNorm);
             if (mae_loss > THRESHOLD){
-              outlier = "Y";
+              outlier = 'Y';
             }else{
-              outlier = "N";
+              outlier = 'N';
             }
             
             //Serial.print("\nValores output después de ejecutado el modelo 2: ");
@@ -326,28 +386,38 @@ void task2() {
               String msg = "Is " + String(value,2) + " an Outlier?: ";
               Serial.print(msg);
               if (mae_loss > THRESHOLD){
-                Serial.println("YES");
-                Serial.println("****** OUTLIER ******");
-                Serial.print("INPUT DATA: ");
+                Serial.print(F("YES\n"));
+                Serial.print(F("****** OUTLIER ******\n"));
+                Serial.print(F("INPUT DATA: "));
                 Serial.println(values_df[i]);
-                Serial.print("MAE: ");
+                Serial.print(F("MAE: "));
                 Serial.println(mae_loss);
                 //Serial.println();
               }
               else{
-                Serial.println("NO");
+                Serial.print(F("NO\n"));
               }           
             #endif
           }
 
           #if (DEBUG == 3) || (DEBUG == 4)
             Serial.print(values_df[i], decimales);
-            Serial.print(",");
-            Serial.print(*outlier);
-            Serial.print(",");
+            Serial.print(F(","));
+            Serial.print(outlier);
+            Serial.print(F(","));
             Serial.println(mae_loss, decimales);
           #endif
       }
+      #if DEBUG == 5
+        // t_finAuto and mem_finAuto
+        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
+        //mensaje[posicion++] = ',';
+        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
+        mensaje[posicion] = '\0';
+        Serial.println(mensaje);
+        mensaje[0] = '\0';
+        posicion = 0;
+      #endif
 
       //Serial.print("Fin del código en núcleo 2\n");
     }
