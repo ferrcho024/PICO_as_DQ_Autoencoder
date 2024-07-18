@@ -26,6 +26,7 @@
 #include "dimensions.h"
 #include "ntp_client.h" // NTP 
 #include "mqtt.h"
+#include "sleep.h"
 
 // We need our utils functions for calculating MEAN, SD and Normalization
 extern "C" {
@@ -178,16 +179,16 @@ void task2() {
   float pred_vals; // Value predicted for the Autoencoder
 
   #if DEBUG == 2
-    Serial.print(F("comp_df,comp_nova,pres_df,pres_nova,acc_df,acc_nova,uncer,concor,fusion,DQIndex\n"));
+    Serial.print(F("Pcomp_df,Pcomp_nova,Ppres_df,Ppres_nova,Pacc_df,Pacc_nova,Puncer,Pconcor,Pfusion,PDQIndex\n"));
   #endif
 
   #if DEBUG == 3
-    Serial.print(F("value,OUTLIER,mae\n"));
+    Serial.print(F("Pvalue,POUTLIER,Pmae\n"));
   #endif
 
   #if DEBUG == 5
     //Serial.print(F("t_beforeDQ,mem_beforeDQ,t_afertDQ,mem_afertDQ,t_initAuto,mem_initAuto,t_finAuto,mem_finAuto\n"));
-    Serial.print(F("t_beforeDQ,t_afertDQ,t_initAuto,t_finAuto\n"));
+    Serial.print(F("Pt_beforeDQ,Pt_afertDQ,Pt_initAuto,Pt_finAuto\n"));
   #endif
 
   while (true) {
@@ -195,6 +196,10 @@ void task2() {
     delay(frec/2);
 
     if(!ban){
+
+      enter_sleep_mode(2);
+      //sleep_ms(2000); 
+
       #if DEBUG == 1
         Serial.print(F("Tarea 2 ejecutándose en el núcleo 2\n"));
       #endif
@@ -230,6 +235,10 @@ void task2() {
         //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
         //mensaje[posicion++] = ',';
       #endif
+
+      //Serial.print(F("Inicio Pausa\n"));
+      enter_sleep_mode(3);
+      //Serial.print(F("Fin Pausa\n"));
 
 
       #if DEBUG == 1
@@ -418,6 +427,8 @@ void task2() {
         mensaje[0] = '\0';
         posicion = 0;
       #endif
+      
+      enter_sleep_mode(4);
 
       //Serial.print("Fin del código en núcleo 2\n");
     }
