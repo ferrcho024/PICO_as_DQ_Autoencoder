@@ -1,3 +1,8 @@
+#define MODE 2  // MODE 1: recive data from MQTT
+                // MODE 2: Read data from a list
+                // MODE 3: Read data from a list and send fusión data
+                // MODE 4: Read data from a list, DQ and send data to GW
+
 #include <Arduino.h>
 #include <stdio.h>
 //#include <stdlib.h>
@@ -8,6 +13,8 @@
 #include "pico/time.h"
 //#include "littlefs-lib/pico_hal.h"
 
+
+#if (MODE < 4)
 // Import TensorFlow stuff - Autoencoder
 //#include <TensorFlowLite_ESP32.h>
 #include "modelo_df.h" // Autoencoder
@@ -20,6 +27,30 @@
 //#include "tensorflow/lite/micro/system_setup.h"
 //#include "tensorflow/lite/schema/schema_generated.h"
 
+// Settings Autoencoder
+constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
+constexpr float MEAN_TRAINING = 26.403898673843077;    // Mean of the training process
+constexpr float STD_TRAINING = 10.86128076630132;    // Standard Desviation of the training process
+constexpr int WAIT_TIME = 1000;       // ms between sample sets
+
+// TFLite globals, used for compatibility with Arduino-style sketches - Autoencoder
+namespace {
+  tflite::ErrorReporter* error_reporter = nullptr;
+  const tflite::Model* model = nullptr;
+  tflite::MicroInterpreter* interpreter = nullptr;
+  TfLiteTensor* model_input = nullptr;
+  TfLiteTensor* model_output = nullptr;
+
+  // Create an area of memory to use for input, output, and other TensorFlow
+  // arrays. You'll need to adjust this by combiling, running, and looking
+  // for errors.
+  constexpr int kTensorArenaSize = 6 * 1024;
+  uint8_t tensor_arena[kTensorArenaSize];
+} // namespace
+
+#endif
+
+
 #include "parameters.h"
 //#include "file_func.h"
 #include "connectivity.h"
@@ -27,6 +58,7 @@
 #include "ntp_client.h" // NTP 
 #include "mqtt.h"
 #include "sleep.h"
+#include "ftoa.h"
 
 // We need our utils functions for calculating MEAN, SD and Normalization
 extern "C" {
@@ -34,7 +66,7 @@ extern "C" {
 };
 
 // Set debug info
-#define DEBUG 5 //{0: No debug anything, 
+#define DEBUG 2 //{0: No debug anything, 
                 // 1: Debug full DQ and Autoencoder results, 
                 // 2: Debug resume DQ only, 
                 // 3: Debug resume Autoencoder only,
@@ -47,11 +79,7 @@ extern "C" {
 char mensaje[200];
 int posicion = 0;
 
-// Settings Autoencoder
-constexpr float THRESHOLD = 0.3500242427984803;    // Any MSE over this is an anomaly
-constexpr float MEAN_TRAINING = 26.403898673843077;    // Mean of the training process
-constexpr float STD_TRAINING = 10.86128076630132;    // Standard Desviation of the training process
-constexpr int WAIT_TIME = 1000;       // ms between sample sets
+
 
 // Settings DQ 
 //extern char* in_txt;
@@ -77,21 +105,6 @@ void value_to_list(float *list, const char* value, int pos ){
     }
 }
 
-// TFLite globals, used for compatibility with Arduino-style sketches - Autoencoder
-namespace {
-  tflite::ErrorReporter* error_reporter = nullptr;
-  const tflite::Model* model = nullptr;
-  tflite::MicroInterpreter* interpreter = nullptr;
-  TfLiteTensor* model_input = nullptr;
-  TfLiteTensor* model_output = nullptr;
-
-  // Create an area of memory to use for input, output, and other TensorFlow
-  // arrays. You'll need to adjust this by combiling, running, and looking
-  // for errors.
-  constexpr int kTensorArenaSize = 6 * 1024;
-  uint8_t tensor_arena[kTensorArenaSize];
-} // namespace
-
 void task1() {
   int cont = 0; // Variable de conteo de datos recibidos.
   float queue_df[MAX_SIZE];
@@ -106,12 +119,18 @@ void task1() {
       Serial.printf("Se montó\n");
     }
   */
-
+  #if (MODE > 1)
+    callback = true;
+  #endif
+  
   while(true){
     delay(frec/4);
     client.loop();
 
     if (cont > 59){
+      #if (MODE > 1)
+        callback = false;
+      #endif
       cont = 0;
       memcpy(values_df, queue_df, sizeof(queue_df));
       memcpy(values_nova, queue_nova, sizeof(queue_nova));
@@ -120,6 +139,14 @@ void task1() {
 
     if (callback){ 
       ledBlink(1); 
+
+      #if (MODE > 1)
+        in_txt += datos_df[cont];
+        in_txt += ",";
+        in_txt += datos_nova[cont];
+        in_txt += ",";
+        in_txt += dato_siata;
+      #endif
 
       //   Encontrar la posición de la primera coma
       int comaPos1 = in_txt.indexOf(',');
@@ -136,20 +163,28 @@ void task1() {
       in_txt = "";
 
       /*
-    //   if (token != ID){
-      
-      Serial.printf("Valor DF: %s\n",df_value);
-      Serial.printf("Valor NOVA: %s\n",nova_value);
-      Serial.printf("Valor SIATA: %s\n",in_txt);
-      Serial.printf("%d\n",cont);
-      Serial.printf("\n");
-
+      Serial.print(F("Valor DF: "));
+      Serial.println(df_value);
+      Serial.print(F("Valor NOVA: "));
+      Serial.println(nova_value);
+      Serial.print(F("Valor SIATA: "));
+      Serial.println(value_siata);
+      Serial.println(cont);
+      Serial.print(F("\n"));
       */
+      
     
       value_to_list(queue_df, df_value.c_str(), cont);
-      value_to_list(queue_nova, nova_value.c_str(), cont);   
+      value_to_list(queue_nova, nova_value.c_str(), cont);  
 
-      callback = false;
+      #if MODE == 1
+        callback = false;
+      #endif
+
+      #if (MODE > 1)
+        delay(500);
+      #endif 
+
       cont++;
     }
   }
@@ -163,6 +198,18 @@ void task2() {
   size_t listSize;
   static float input_data[MAX_SIZE];
   static float valuesFusioned[MAX_SIZE];
+  
+  #if MODE == 3
+  char dato[15]; //size of the number
+  char str_fusion[10]; //size of the number
+  #endif
+
+  #if MODE == 4
+  char dato[30]; //size of the number
+  char str_df[10]; //size of the number
+  char str_nova[10]; //size of the number
+  char str_siata[10]; //size of the number
+  #endif
 
   float p_com_df;   
   float p_com_nova;
@@ -188,7 +235,7 @@ void task2() {
 
   #if DEBUG == 5
     //Serial.print(F("t_beforeDQ,mem_beforeDQ,t_afertDQ,mem_afertDQ,t_initAuto,mem_initAuto,t_finAuto,mem_finAuto\n"));
-    Serial.print(F("Pt_beforeDQ,Pt_afertDQ,Pt_initAuto,Pt_finAuto\n"));
+    Serial.print(F("Pt_initAuto,Pt_finAuto,Pt_beforeDQ,Pt_afertDQ\n"));
   #endif
 
   while (true) {
@@ -197,7 +244,7 @@ void task2() {
 
     if(!ban){
 
-      enter_sleep_mode(2);
+      enter_sleep_mode(4);
       //sleep_ms(2000); 
 
       #if DEBUG == 1
@@ -216,110 +263,14 @@ void task2() {
         //mensaje[posicion++] = ',';
       #endif
 
-      p_com_df = completeness(values_df, listSize);   
-      p_com_nova = completeness(values_nova, listSize);
-      uncer = uncertainty(values_df, values_nova, listSize);
-      p_df = precision(values_df, listSize);
-      p_nova = precision(values_nova, listSize);
-      a_df = accuracy(values_df, value_siata, listSize);
-      a_nova = accuracy(values_nova, value_siata, listSize);
-      concor = PearsonCorrelation(values_df, values_nova, listSize);
-      plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize, valuesFusioned);
-      fusion = calculateMean(valuesFusioned, listSize);
-      DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
 
-      #if DEBUG == 5
-        // t_afterDQ and mem_afterDQ
-        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
-        mensaje[posicion++] = ',';
-        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
-        //mensaje[posicion++] = ',';
-      #endif
-
-      //Serial.print(F("Inicio Pausa\n"));
-      enter_sleep_mode(3);
-      //Serial.print(F("Fin Pausa\n"));
-
-
-      #if DEBUG == 1
-        Serial.print(F("\n**********************************************\n"));
-        Serial.print(F("********** Completeness DF: "));
-        Serial.println(p_com_df, decimales);
-        Serial.print(F("********** Completeness NOVA: "));
-        Serial.println(p_com_nova, decimales);
-        Serial.print(F("********** Uncertainty: "));
-        Serial.println(uncer, decimales);
-        Serial.print(F("********** Precision DF: "));
-        Serial.println(p_df, decimales);
-        Serial.print(F("********** Precision NOVA: "));
-        Serial.println(p_nova, decimales);
-        Serial.print(F("********** Accuracy DF: "));
-        Serial.println(a_df, decimales);
-        Serial.print(F("********** Accuracy NOVA: "));
-        Serial.println(a_nova, decimales);
-        Serial.print(F("********** Concordance: "));
-        Serial.println(concor, decimales);
-        Serial.print(F("********** Value Fusioned: "));
-        Serial.println(fusion, decimales);
-        Serial.print(F("********** DQ Index: "));
-        Serial.println(DQIndex, decimales);
-      #endif
-
-      #if (DEBUG == 2) || (DEBUG == 4)
-        Serial.print(p_com_df, decimales);
-        Serial.print(F(","));
-        Serial.print(p_com_nova, decimales);
-        Serial.print(F(","));
-        Serial.print(p_df, decimales);
-        Serial.print(F(","));
-        Serial.print(p_nova, decimales);
-        Serial.print(F(","));
-        Serial.print(a_df, decimales);
-        Serial.print(F(","));
-        Serial.print(a_nova, decimales);
-        Serial.print(F(","));
-        Serial.print(uncer, decimales);
-        Serial.print(F(","));
-        Serial.print(concor, decimales);
-        Serial.print(F(","));
-        Serial.print(fusion, decimales);
-        Serial.print(F(","));
-        Serial.println(DQIndex, decimales);
-      #endif
-
-
-      //String mqtt_msg = String(ID) + "," + String(fusion, decimales) + ",distancia," + String(DQIndex, decimales);
-      //client.publish(TOPIC.c_str(), mqtt_msg);
-
-      /*
-      char mqtt_msg[50];
-      sprintf(mqtt_msg, "%s,%.5f,distancia,%.5f",ID,fusion,DQIndex);
-      client.publish(TOPIC.c_str(), mqtt_msg);
-
-      char resultString[50];
-      sprintf(resultString, "%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f",p_com_df,p_com_nova,p_df,p_nova,a_df,a_nova,uncer,concor,fusion,DQIndex);
-      //writeFile(dimensions, resultString);
-      dimen[siataValue%24][0] = p_com_df;
-      dimen[siataValue%24][1] = p_com_nova;
-      dimen[siataValue%24][2] = p_df;
-      dimen[siataValue%24][3] = p_nova;
-      dimen[siataValue%24][4] = a_df;
-      dimen[siataValue%24][5] = a_nova;
-      dimen[siataValue%24][6] = uncer;
-      dimen[siataValue%24][7] = concor;
-      dimen[siataValue%24][8] = fusion;
-      dimen[siataValue%24][9] = DQIndex;
-
-      //read_data_from_file("/spiffs/data.txt"); // Lee el archivo con formato de hora y valor float
-
-      */
 
       //Serial.println("Antes invoke_status");
 
       //float* input_data = normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING);
-      normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING, input_data);
+      
 
-      #if DEBUG == 5
+      #if DEBUG == 5 
         // t_initAuto and mem_initAuto
         posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
         mensaje[posicion++] = ',';
@@ -327,7 +278,10 @@ void task2() {
         //mensaje[posicion++] = ',';
       #endif
 
+
+      #if (MODE < 4)
       // Autoencoder
+      normalize_data(values_df, listSize, MEAN_TRAINING, STD_TRAINING, input_data);
       TfLiteStatus invoke_status;
 
       //Serial.println("Después invoke_status");
@@ -417,6 +371,8 @@ void task2() {
             Serial.println(mae_loss, decimales);
           #endif
       }
+      #endif
+
       #if DEBUG == 5
         // t_finAuto and mem_finAuto
         posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
@@ -428,6 +384,147 @@ void task2() {
         posicion = 0;
       #endif
       
+      enter_sleep_mode(4);
+
+      // Data Quality
+      p_com_df = completeness(values_df, listSize);   
+      p_com_nova = completeness(values_nova, listSize);
+      uncer = uncertainty(values_df, values_nova, listSize);
+      p_df = precision(values_df, listSize);
+      p_nova = precision(values_nova, listSize);
+      a_df = accuracy(values_df, value_siata, listSize);
+      a_nova = accuracy(values_nova, value_siata, listSize);
+      concor = PearsonCorrelation(values_df, values_nova, listSize);
+      plausability(p_com_df, p_com_nova, p_df, p_nova, a_df, a_nova, values_df, values_nova, listSize, valuesFusioned);
+      fusion = calculateMean(valuesFusioned, listSize);
+      DQIndex = DQ_Index(valuesFusioned, uncer, concor, value_siata, listSize);
+
+      #if DEBUG == 5
+        // t_afterDQ and mem_afterDQ
+        posicion += sprintf(mensaje + posicion, "%lu", time_us_32());
+        mensaje[posicion++] = ',';
+        //posicion += sprintf(mensaje + posicion, "%u", heap_get_free_size());
+        //mensaje[posicion++] = ',';
+      #endif
+
+      //Serial.print(F("Inicio Pausa\n"));
+      enter_sleep_mode(4);
+      //Serial.print(F("Fin Pausa\n"));
+
+
+      #if DEBUG == 1
+        Serial.print(F("\n**********************************************\n"));
+        Serial.print(F("********** Completeness DF: "));
+        Serial.println(p_com_df, decimales);
+        Serial.print(F("********** Completeness NOVA: "));
+        Serial.println(p_com_nova, decimales);
+        Serial.print(F("********** Uncertainty: "));
+        Serial.println(uncer, decimales);
+        Serial.print(F("********** Precision DF: "));
+        Serial.println(p_df, decimales);
+        Serial.print(F("********** Precision NOVA: "));
+        Serial.println(p_nova, decimales);
+        Serial.print(F("********** Accuracy DF: "));
+        Serial.println(a_df, decimales);
+        Serial.print(F("********** Accuracy NOVA: "));
+        Serial.println(a_nova, decimales);
+        Serial.print(F("********** Concordance: "));
+        Serial.println(concor, decimales);
+        Serial.print(F("********** Value Fusioned: "));
+        Serial.println(fusion, decimales);
+        Serial.print(F("********** DQ Index: "));
+        Serial.println(DQIndex, decimales);
+      #endif
+
+      #if (DEBUG == 2) || (DEBUG == 4)
+        Serial.print(p_com_df, decimales);
+        Serial.print(F(","));
+        Serial.print(p_com_nova, decimales);
+        Serial.print(F(","));
+        Serial.print(p_df, decimales);
+        Serial.print(F(","));
+        Serial.print(p_nova, decimales);
+        Serial.print(F(","));
+        Serial.print(a_df, decimales);
+        Serial.print(F(","));
+        Serial.print(a_nova, decimales);
+        Serial.print(F(","));
+        Serial.print(uncer, decimales);
+        Serial.print(F(","));
+        Serial.print(concor, decimales);
+        Serial.print(F(","));
+        Serial.print(fusion, decimales);
+        Serial.print(F(","));
+        Serial.println(DQIndex, decimales);
+      #endif
+
+
+      //String mqtt_msg = String(ID) + "," + String(fusion, decimales) + ",distancia," + String(DQIndex, decimales);
+      //client.publish(TOPIC.c_str(), mqtt_msg);
+
+      /*
+      char mqtt_msg[50];
+      sprintf(mqtt_msg, "%s,%.5f,distancia,%.5f",ID,fusion,DQIndex);
+      client.publish(TOPIC.c_str(), mqtt_msg);
+
+      char resultString[50];
+      sprintf(resultString, "%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f",p_com_df,p_com_nova,p_df,p_nova,a_df,a_nova,uncer,concor,fusion,DQIndex);
+      //writeFile(dimensions, resultString);
+      dimen[siataValue%24][0] = p_com_df;
+      dimen[siataValue%24][1] = p_com_nova;
+      dimen[siataValue%24][2] = p_df;
+      dimen[siataValue%24][3] = p_nova;
+      dimen[siataValue%24][4] = a_df;
+      dimen[siataValue%24][5] = a_nova;
+      dimen[siataValue%24][6] = uncer;
+      dimen[siataValue%24][7] = concor;
+      dimen[siataValue%24][8] = fusion;
+      dimen[siataValue%24][9] = DQIndex;
+
+      //read_data_from_file("/spiffs/data.txt"); // Lee el archivo con formato de hora y valor float
+
+      */
+
+      #if (MODE == 3) || (MODE == 4)
+        ConnectToWiFi();
+        createMQTTClient();
+
+        delay(500);
+
+        #if (MODE == 4)
+          ftoa(value_siata, str_siata, 5);
+
+          for (int i = 0; i < listSize; i++ ){
+            ftoa(values_df[i], str_df, 5);
+            ftoa(values_nova[i], str_nova, 5);
+            sprintf(dato, "%s,%s,%s,%s", ID.c_str(), str_df, str_nova, str_siata);
+            client.publish((TOPIC + 1).c_str(), dato); 
+            
+            ledBlink(1);
+            
+            delay(500);
+          }
+        #endif
+
+        #if (MODE == 3)
+          ftoa(fusion, str_fusion, 5);
+          //Serial.println(fusion);
+          //Serial.println(str_fusion);
+          sprintf(dato, "%s,%s", ID.c_str(), str_fusion);
+          client.publish((TOPIC + 1).c_str(), dato);
+
+          ledBlink(1);
+          delay(500);
+        #endif
+
+        client.disconnect();
+        WiFi.disconnect(true);
+      #endif
+
+      #if (MODE > 1)
+        callback = true;
+      #endif
+
       enter_sleep_mode(4);
 
       //Serial.print("Fin del código en núcleo 2\n");
@@ -448,16 +545,23 @@ void setup() {
 
   // Obtener hora de servidor NTP y actualizar el RTC
   run_ntp_test();
+
+  #if (MODE > 1)
+    WiFi.disconnect(true);
+  #endif
   
   //mountLittleFS();
   //createFile(data); // Archivo de memoria permanente 
   //createFile(dimensions); // Archivo que almacena las métricas cada hora 
   //writeFile(dimensions, "hora,comp_df,comp_nova,prec_df,prec_nova,acc_df,acc_nova,uncer,concor");
   //writeFile(data, "fechaHora,pm25df,pm25nova");
-  createMQTTClient();
+  #if MODE == 1
+    createMQTTClient();
+  #endif
+  
   //connectMQTTBroker();
 
-
+  #if (MODE < 4)
   // Autoeoncoder
   // Set up logging (will report to Serial, even within TFLite functions) - Autoencoder
   //static tflite::ErrorReporter error_reporter;
@@ -503,7 +607,7 @@ void setup() {
   // Assign model input and output buffers (tensors) to pointers - Autoencoder
   model_input = interpreter->input(0);
   model_output = interpreter->output(0);
-
+  #endif
 
 
   multicore_launch_core1(task2);

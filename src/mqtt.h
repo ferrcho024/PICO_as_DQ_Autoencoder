@@ -6,7 +6,7 @@
 #include <PubSubClient.h>
 
 // MQTT settings
-const String ID = "1";
+const String ID = "2";
 const String BROKER = "192.168.1.102";
 const String CLIENT_NAME = "pico_"+ID;
 const String TOPIC = "80";
